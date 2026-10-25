@@ -16,7 +16,7 @@ import time
 import unicodedata
 import urllib.request
 
-VERSION = "1.0"
+VERSION = "1.1"
 BUILD_DATE = "2026-10-25"
 
 SITE = "https://www.allan.lat/radio.html"
@@ -233,9 +233,25 @@ HELP = [
     "/                           buscar pelo nome (Esc limpa)",
     "R                           recarregar lista do site",
     "K                           trocar skin (Azul/PC-XT/Vermelha/Preta)",
+    "F8                          como adicionar novas rádios",
     "Q  ou  F10                  sair",
     "",
     f"RADIO.EXE v{VERSION} — {BUILD_DATE}",
+]
+
+ADD_INFO = [
+    "As estações vêm de duas fontes:",
+    "",
+    "1) Online: o HTML em SITE (constante no topo do radio.py),",
+    '   um array  const STATIONS = [...]  com {n, u, t}.',
+    "2) Cache local: ~/.cache/radio/stations.json — uma lista",
+    "   JSON de objetos, por exemplo:",
+    '   {"n": "Nome", "u": "http://stream.url", "t": "Categoria"}',
+    "",
+    "Edite o stations.json à mão e tecle R pra recarregar.",
+    "Atenção: se SITE estiver acessível, ele sobrescreve esse",
+    "cache no próximo R. Pra manter sua lista fixa, aponte a",
+    "constante SITE pro seu próprio HTML (ou deixe-a inválida).",
 ]
 
 
@@ -246,6 +262,8 @@ def main(scr):
     init_colors(skin)
     scr.bkgd(" ", curses.color_pair(C_BG))
     scr.timeout(250)
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+    curses.mouseinterval(0)
 
     stations, source = load_stations()
     mpv = Mpv(state.get("volume", 80))
@@ -255,6 +273,7 @@ def main(scr):
     query, searching = "", False
     sel, top = 0, 0
     playing, status, show_help = None, "Parado", False
+    show_addinfo = False
 
     def visible():
         out = stations if tags[tag_i] == "Todas" else [s for s in stations if s["t"] == tags[tag_i]]
@@ -305,6 +324,7 @@ def main(scr):
         put(scr, 0, w - 7, time.strftime("%H:%M"), bar)
 
         # abas de categoria / busca
+        tab_hits = []
         x = 1
         if searching or query:
             put(scr, 1, 1, "Busca: ", curses.color_pair(C_TITLE) | curses.A_BOLD)
@@ -317,6 +337,7 @@ def main(scr):
                     break
                 attr = curses.color_pair(C_TAB) | curses.A_BOLD if i == tag_i else curses.color_pair(C_DIM)
                 put(scr, 1, x, label, attr)
+                tab_hits.append((i, x, x + len(label)))
                 x += len(label) + 1
 
         # lista
@@ -344,12 +365,15 @@ def main(scr):
             else:
                 attr = curses.color_pair(C_BG)
             put(scr, 3 + r, 1, " " + line, attr, width=w - 2)
+        scroll_hit = None
         if len(lst) > rows:
             pos = int((top / max(1, len(lst) - rows)) * (rows - 1))
             for r in range(rows):
                 put(scr, 3 + r, w - 1, "█" if r == pos else "░", curses.color_pair(C_DIM))
+            scroll_hit = (w - 1, 3, 3 + rows - 1)
         if not lst:
             put(scr, 4, 3, "Nenhuma estação encontrada.", curses.color_pair(C_DIM))
+        row_hit = (3, 3 + rows - 1, 1, w - 2)
 
         # painel "tocando"
         py = 2 + lh
@@ -366,8 +390,10 @@ def main(scr):
             put(scr, py + 2, 10, track, curses.color_pair(C_TITLE), width=w - 12)
         put(scr, py + 3, 2, "Volume: ", curses.color_pair(C_DIM))
         put(scr, py + 3, 10, vol_bar(p.get("volume", state.get("volume", 80))), curses.color_pair(C_BG))
+        vol_hit = (py + 3, 10, 30)
 
         # barra de teclas estilo DOS
+        fkey_hits = []
         keys = [("F1", "Ajuda"), ("Enter", "Tocar"), ("Espaço", "Pausa"), ("S", "Parar"),
                 ("+/-", "Volume"), ("/", "Busca"), ("←→", "Categ."), ("K", "Skin"), ("F10", "Sair")]
         x = 0
@@ -377,6 +403,19 @@ def main(scr):
                 break
             put(scr, h - 1, x, k, curses.color_pair(C_KEY) | curses.A_BOLD)
             put(scr, h - 1, x + len(k), label + " ", bar)
+            if k == "+/-":
+                mid = x + 1
+                fkey_hits.append((x, mid, "vol+"))
+                fkey_hits.append((mid, x + len(k), "vol-"))
+            elif k == "←→":
+                mid = x + len(k) // 2
+                fkey_hits.append((x, mid, "cat_prev"))
+                fkey_hits.append((mid, x + len(k), "cat_next"))
+            else:
+                fkey_hits.append((x, x + len(k) + len(label) + 1,
+                                   {"F1": "help", "Enter": "play", "Espaço": "pause",
+                                    "S": "stop", "/": "search", "K": "skin",
+                                    "F10": "quit"}[k]))
             x += len(k) + len(label) + 2
 
         if show_help:
@@ -389,6 +428,16 @@ def main(scr):
                 put(scr, hy + 2 + r, hx + 2, line, bar)
             put(scr, hy + hh - 1, hx + hw - 22, " qualquer tecla ", bar | curses.A_BOLD)
 
+        if show_addinfo:
+            hw2, hh2 = 64, len(ADD_INFO) + 4
+            hy2, hx2 = max(0, (h - hh2) // 2), max(0, (w - hw2) // 2)
+            for r in range(hh2):
+                put(scr, hy2 + r, hx2, " " * hw2, bar)
+            box(scr, hy2, hx2, hh2, hw2, "Como adicionar rádios", bar)
+            for r, line in enumerate(ADD_INFO):
+                put(scr, hy2 + 2 + r, hx2 + 2, line, bar, width=hw2 - 4)
+            put(scr, hy2 + hh2 - 1, hx2 + hw2 - 22, " qualquer tecla ", bar | curses.A_BOLD)
+
         scr.refresh()
 
         # ---------------- teclado
@@ -396,8 +445,104 @@ def main(scr):
             k = scr.get_wch()
         except curses.error:
             continue
+
+        mbstate = mcx = mcy = None
+        if k == curses.KEY_MOUSE:
+            try:
+                _, mcx, mcy, _, mbstate = curses.getmouse()
+            except curses.error:
+                continue
+        # um clique "solta" dois eventos (pressionar e soltar); só o de
+        # pressionar deve fechar os quadros de ajuda, senão o próprio
+        # clique que os abre já os fecharia de novo no evento de soltar.
+        mouse_press = mbstate is not None and bool(
+            mbstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED))
         if show_help:
-            show_help = False
+            if mbstate is None or mouse_press:
+                show_help = False
+            continue
+        if show_addinfo:
+            if mbstate is None or mouse_press:
+                show_addinfo = False
+            continue
+
+        if mbstate is not None and not searching:
+            bstate = mbstate
+            if bstate & curses.BUTTON4_PRESSED:
+                sel -= 1
+                continue
+            if bstate & getattr(curses, "BUTTON5_PRESSED", 0):
+                sel += 1
+                continue
+            if not bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED):
+                continue
+            if tab_hits and mcy == 1:
+                for i, x0, x1 in tab_hits:
+                    if x0 <= mcx < x1:
+                        tag_i, sel, top = i, 0, 0
+                        break
+                continue
+            if row_hit[0] <= mcy <= row_hit[1] and row_hit[2] <= mcx <= row_hit[3]:
+                i = top + (mcy - row_hit[0])
+                if i < len(lst):
+                    sel = i
+                    playing = lst[i]
+                    status = "Conectando…"
+                    mpv.props.pop("media-title", None)
+                    mpv.play(playing["u"])
+                    state.update(last=playing["n"], tag=tags[tag_i])
+                    save_state(state)
+                continue
+            if scroll_hit and mcx == scroll_hit[0] and scroll_hit[1] <= mcy <= scroll_hit[2]:
+                span = max(1, scroll_hit[2] - scroll_hit[1])
+                frac = (mcy - scroll_hit[1]) / span
+                top = int(frac * max(0, len(lst) - rows))
+                sel = top
+                continue
+            if vol_hit[1] <= mcx <= vol_hit[2] and mcy == vol_hit[0]:
+                span = max(1, vol_hit[2] - vol_hit[1])
+                frac = max(0.0, min(1.0, (mcx - vol_hit[1]) / span))
+                mpv.cmd("set_property", "volume", round(frac * 100))
+                continue
+            if mcy == h - 1 and fkey_hits:
+                want_quit = False
+                for fx0, fx1, action in fkey_hits:
+                    if fx0 <= mcx < fx1:
+                        if action == "help":
+                            show_help = True
+                        elif action == "play" and lst:
+                            playing = lst[sel]
+                            status = "Conectando…"
+                            mpv.props.pop("media-title", None)
+                            mpv.play(playing["u"])
+                            state.update(last=playing["n"], tag=tags[tag_i])
+                            save_state(state)
+                        elif action == "pause" and playing:
+                            mpv.cmd("cycle", "pause")
+                        elif action == "stop":
+                            mpv.stop()
+                            playing, status = None, "Parado"
+                        elif action == "vol+":
+                            mpv.cmd("add", "volume", 5)
+                        elif action == "vol-":
+                            mpv.cmd("add", "volume", -5)
+                        elif action == "search":
+                            searching = True
+                        elif action == "cat_prev":
+                            tag_i, sel, top = (tag_i - 1) % len(tags), 0, 0
+                        elif action == "cat_next":
+                            tag_i, sel, top = (tag_i + 1) % len(tags), 0, 0
+                        elif action == "skin":
+                            skin = SKINS[(SKINS.index(skin) + 1) % len(SKINS)]
+                            init_colors(skin)
+                            state["skin"] = skin
+                            save_state(state)
+                            status = f"Skin: {skin}"
+                        elif action == "quit":
+                            want_quit = True
+                        break
+                if want_quit:
+                    break
             continue
 
         if searching:
@@ -421,6 +566,8 @@ def main(scr):
             break
         elif k == curses.KEY_F1 or k in ("h", "H", "?"):
             show_help = True
+        elif k == curses.KEY_F8:
+            show_addinfo = True
         elif k == curses.KEY_UP:
             sel -= 1
         elif k == curses.KEY_DOWN:

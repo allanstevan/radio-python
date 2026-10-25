@@ -56,7 +56,11 @@ do arquivo.
 | `R`                 | recarregar lista do site               |
 | `K`                 | trocar skin (veja abaixo)              |
 | `F1`                | ajuda                                  |
+| `F8`                | como adicionar novas rádios            |
 | `Q` ou `F10`        | sair                                   |
+
+Mouse também funciona: clica numa categoria, numa estação (toca na hora),
+na barra de rolagem, na barra de volume e em cada item do rodapé.
 
 ## Skins
 
@@ -67,6 +71,24 @@ Aperte `K` pra ciclar entre 4 esquemas de cor (fica salvo em
 - **PC-XT** — mono fósforo verde, estilo monitor CGA/Hercules dos anos 80.
 - **Vermelha** — a mesma paleta da Azul, só com o fundo em tons de vermelho.
 - **Preta** — mono fósforo branco (preto e branco puro).
+
+## Adicionando suas próprias rádios
+
+As estações vêm de duas fontes (também tem um resumo disso dentro do
+programa, tecla `F8`):
+
+1. **Online**: o HTML apontado pela constante `SITE` (topo do arquivo),
+   contendo um array `const STATIONS = [...]` com objetos `{n, u, t}`.
+2. **Cache local**: `~/.cache/radio/stations.json` — uma lista JSON simples:
+
+```json
+[{"n": "Nome da Rádio", "u": "http://stream.url/exemplo", "t": "Categoria"}]
+```
+
+Edite esse arquivo à mão e tecle `R` pra recarregar. Só uma pegadinha: se
+`SITE` estiver acessível, ele sobrescreve esse cache no próximo `R`. Pra
+manter sua lista fixa, troque `SITE` pelo seu próprio HTML ou deixe-a
+apontando pra algo inválido/offline.
 
 ## Estado salvo
 
